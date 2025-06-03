@@ -52,9 +52,9 @@ view_10(x,y)
 class MLP(nn.Module):
     def __init__(self):
         super(MLP, self).__init__()
-        self.fc1 = nn.Linear(784, 200);
-        self.fc2 = nn.Linear(200, 200);
-        self.out = nn.Linear(200, 10);
+        self.fc1 = nn.Linear(784, 200)
+        self.fc2 = nn.Linear(200, 200)
+        self.out = nn.Linear(200, 10)
 
     def forward(self, x):
         x = x.flatten(1) # [B x 784]
@@ -123,7 +123,7 @@ def train_client(id, client_loader, global_model, num_local_epochs, lr):
 
     return local_model
 
-def running_model_avg(current, next, scale):
+def running_model_avg(current, next, scale): # 15a
     if current == None:
         current = next
         for key in current:
@@ -150,6 +150,7 @@ def fed_avg_experiment(global_model, num_clients_per_round, num_local_epochs, lr
         for i,c in enumerate(clients):
             # train local client
             print("round {}, starting client {}/{}, id: {}".format(t, i+1,num_clients_per_round, c))
+            # Add noise to the global model (Gaussian noise)
             local_model = train_client(c, client_train_loader[c], global_model, num_local_epochs, lr)
 
             # add local model parameters to running average
