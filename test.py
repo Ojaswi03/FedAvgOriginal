@@ -37,7 +37,7 @@ lr = 0.05 # Learning rate for local training
 train_data, test_data = fetch_dataset()
 test_loader = torch.utils.data.DataLoader(test_data, batch_size=1000, shuffle=False)
 iid_client_train_loader = iid_partition_loader(train_data, bsz=bsz)
-# set up noniid_client_train_loader as needed.
+# (You can also set up noniid_client_train_loader as needed.)
 
 # Models
 class MLP(nn.Module):
@@ -153,96 +153,3 @@ acc_mlp_ebm = fed_EBM(
 
 np.save('./acc_mlp_ebm.npy', acc_mlp_ebm)
 print(acc_mlp_ebm)
-
-
-
-# MLP - iid - m=50 experiment
-# mlp_iid_m50 = copy.deepcopy(mlp)
-# acc_mlp_iid_m50 = fed_avg_experiment(mlp_iid_m50, num_clients_per_round=50, 
-#                                  num_local_epochs=1,
-#                                  lr=0.05,
-#                                  client_train_loader = iid_client_train_loader,
-#                                  max_rounds=100,# 100
-#                                  filename='./acc_mlp_iid_m50',
-#                                  sigma_e=0.1)
-# print(acc_mlp_iid_m50)
-# np.save('./acc_mlp_iid_m50.npy', acc_mlp_iid_m50)
-
-
-# # MLP - non-iid - m=10 experiment
-# mlp_noniid_m10 = copy.deepcopy(mlp)
-# acc_mlp_noniid_m10 = fed_avg_experiment(mlp_noniid_m10, num_clients_per_round=10, 
-#                                  num_local_epochs=1,
-#                                  lr=0.05,
-#                                  client_train_loader = noniid_client_train_loader,
-#                                  max_rounds=300,
-#                                  filename = './acc_mlp_noniid_m10')
-# print(acc_mlp_noniid_m10)
-# np.save('./acc_mlp_noniid_m10.npy', acc_mlp_noniid_m10)
-
-
-
-# # MLP - noniid - m=50 experiment
-# mlp_noniid_m50 = copy.deepcopy(mlp)
-# acc_mlp_noniid_m50 = fed_avg_experiment(mlp_noniid_m50, num_clients_per_round=50, 
-#                                  num_local_epochs=1,
-#                                  lr=0.05,
-#                                  client_train_loader = noniid_client_train_loader,
-#                                  max_rounds=300,
-#                                  filename='./acc_mlp_noniid_m50')
-# print(acc_mlp_noniid_m50)
-# np.save('./acc_mlp_noniid_m50.npy', acc_mlp_noniid_m50)
-
-
-# cnn = CNN()
-# print(cnn)
-# print("total params: ", num_params(cnn))
-
-
-# # CNN - iid - m=10 experiment
-# cnn_iid_m10 = copy.deepcopy(cnn)
-# acc_cnn_iid_m10 = fed_avg_experiment(cnn_iid_m10, num_clients_per_round=10, 
-#                                  num_local_epochs=5,
-#                                  lr=0.01,
-#                                  client_train_loader = iid_client_train_loader,
-#                                  max_rounds=100,  # 100
-#                                  filename='./acc_cnn_iid_m10')
-# print(acc_cnn_iid_m10)
-# np.save('./acc_cnn_iid_m10.npy', acc_cnn_iid_m10)
-
-
-# # CNN - iid - m=50 experiment
-# cnn_iid_m50 = copy.deepcopy(cnn)
-# acc_cnn_iid_m50 = fed_avg_experiment(cnn_iid_m50, num_clients_per_round=50, 
-#                                  num_local_epochs=5,
-#                                  lr=0.01,
-#                                  client_train_loader = iid_client_train_loader,
-#                                  max_rounds=100,  # 100
-#                                  filename='./acc_cnn_iid_m50')
-# print(acc_cnn_iid_m50)
-# np.save('./acc_cnn_iid_m50.npy', acc_cnn_iid_m50)
-
-
-# # CNN - non-iid - m=10 experiment
-# cnn_noniid_m10 = copy.deepcopy(cnn)
-# acc_cnn_noniid_m10 = fed_avg_experiment(cnn_noniid_m10, num_clients_per_round=10, 
-#                                  num_local_epochs=5,
-#                                  lr=0.01,
-#                                  client_train_loader = noniid_client_train_loader,
-#                                  max_rounds=200,
-#                                  filename='./acc_cnn_noniid_m10')
-# print(acc_cnn_noniid_m10)
-# np.save('./acc_cnn_noniid_m10.npy', acc_cnn_noniid_m10)
-
-
-
-# # CNN - non-iid - m=50 experiment
-# cnn_noniid_m50 = copy.deepcopy(cnn)
-# acc_cnn_noniid_m50 = fed_avg_experiment(cnn_noniid_m50, num_clients_per_round=50, 
-#                                  num_local_epochs=5,
-#                                  lr=0.01,
-#                                  client_train_loader = noniid_client_train_loader,
-#                                  max_rounds=100,
-#                                  filename='./acc_cnn_noniid_m50')
-# print(acc_cnn_noniid_m50)
-# np.save('./acc_cnn_noniid_m50.npy', acc_cnn_noniid_m50)

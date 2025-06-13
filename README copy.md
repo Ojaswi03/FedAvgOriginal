@@ -14,6 +14,6 @@ Below are plots of test accuracy after *t* rounds of FedAvg:
 - for a CNN vs a 2 hidden-layer MLP (2NN);
 - for selecting *m*=10 or 50 clients each round.
 
-<img src="iid.png" alt="iid" width="400"> <img src="noniid.png" alt="noniid" width="400">
+<img src="iidOriginal.png" alt="iid" width="400"> <img src="noniidOriginal.png" alt="noniid" width="400">
 
 *E* refers to the number of epochs for local training, for each client, for each round.
