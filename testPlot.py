@@ -33,5 +33,5 @@ if max_acc > 0.99:
 
 plt.legend()
 plt.grid(True)
-plt.savefig(f'fed_avg_EBM_Sigma0_1.png')
+plt.savefig('Images/fed_avg_EBM_accuracy.png', dpi=300)
 plt.show()
