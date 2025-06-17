@@ -1,3 +1,4 @@
+
 import random
 import copy
 
@@ -9,6 +10,7 @@ import torch.nn.functional as F
 
 from util import view_10, num_params
 from data import fetch_dataset, data_to_tensor, iid_partition_loader, noniid_partition_loader
+
 
 # set random seeds
 np.random.seed(0)
@@ -29,6 +31,7 @@ debug_loader = torch.utils.data.DataLoader(train_data, bsz)
 img, label = next(iter(debug_loader))
 view_10(img, label)
 
+
 # get client dataloaders
 iid_client_train_loader = iid_partition_loader(train_data, bsz = bsz)
 noniid_client_train_loader = noniid_partition_loader(train_data, bsz = bsz)
@@ -47,14 +50,13 @@ for (x,y) in noniid_client_train_loader[25]:
 print("non-iid: ", label_dist)
 view_10(x,y)
 
-
 # define fully connected NN
 class MLP(nn.Module):
     def __init__(self):
         super(MLP, self).__init__()
-        self.fc1 = nn.Linear(784, 200)
-        self.fc2 = nn.Linear(200, 200)
-        self.out = nn.Linear(200, 10)
+        self.fc1 = nn.Linear(784, 200);
+        self.fc2 = nn.Linear(200, 200);
+        self.out = nn.Linear(200, 10);
 
     def forward(self, x):
         x = x.flatten(1) # [B x 784]
@@ -86,7 +88,6 @@ class CNN(nn.Module):
 
 print(CNN())
 print(num_params(CNN()))
-
 
 criterion = nn.CrossEntropyLoss()
 
@@ -125,7 +126,7 @@ def train_client(id, client_loader, global_model, num_local_epochs, lr):
 
     return local_model
 
-def running_model_avg(current, next, scale):
+def running_model_avg(current, next, scale): #15a
     if current == None:
         current = next
         for key in current:
@@ -134,7 +135,6 @@ def running_model_avg(current, next, scale):
         for key in current:
             current[key] = current[key] + (next[key] * scale)
     return current
-
 
 
 def fed_avg_experiment(global_model, num_clients_per_round, num_local_epochs, lr, client_train_loader, max_rounds, filename):
@@ -172,10 +172,10 @@ def fed_avg_experiment(global_model, num_clients_per_round, num_local_epochs, lr
     return np.array(round_accuracy)
 
 
-
 mlp = MLP()
 print(mlp)
 print("total params: ", num_params(mlp))
+
 
 # MLP - iid - m=10 experiment
 mlp_iid_m10 = copy.deepcopy(mlp)
@@ -183,7 +183,7 @@ acc_mlp_iid_m10 = fed_avg_experiment(mlp_iid_m10, num_clients_per_round=10,
                                  num_local_epochs=1,
                                  lr=0.05,
                                  client_train_loader = iid_client_train_loader,
-                                 max_rounds=50,
+                                 max_rounds=2000,
                                  filename='./acc_mlp_iid_m10')
 print(acc_mlp_iid_m10)
 np.save('./acc_mlp_iid_m10.npy', acc_mlp_iid_m10)

@@ -1,15 +1,16 @@
 #!/bin/bash
 
 echo "--- Setting up Python virtual environment for Federated Learning ---"
-source fed_learning_env/bin/activate
+ENV_NAME="fed_learning_env"
+source $ENV_NAME/bin/activate
 
 echo "--- Starting Federated Learning Training ---"
-python3 test.py > output.txt 2>&1 &
+python3 fed_avg.py
 echo "--- Training completed ---"
 
-# echo "Plotting results..."
-# python3 testPlot.py
-# echo "--- Plotting completed ---"
+echo "Plotting results..."
+python3 fed_avg_plots.py
+echo "--- Plotting completed ---"
 
 # echo "Environemnt dectivating..."
 # deactivate

@@ -23,9 +23,9 @@ random.seed(0)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print("| using device:", device)
 
-# Hyperparameters
+# # Hyperparameters
 bsz = 10 # Batch size for local training
-SIGMA = 0.1     # Standard deviation for Gaussian noise
+SIGMA = 0.1     # Standard deviation for Gaussian noise 
 S = 5           # Number of noise samples per client
 num_clients = 100 # Total number of clients
 num_rounds = 100 # Total number of communication rounds
@@ -54,6 +54,22 @@ class MLP(nn.Module):
         return x
 
 criterion = nn.CrossEntropyLoss()
+
+# --- Helper: Evaluate average loss of model on loader ---
+def evaluate_loss(model, data_loader, criterion):
+    model.eval()
+    total_loss = 0
+    total = 0
+    with torch.no_grad():
+        for x, y in data_loader:
+            x = x.to(device)
+            y = y.to(device)
+            out = model(x)
+            loss = criterion(out, y)
+            total_loss += loss.item() * x.size(0)
+            total += x.size(0)
+    return total_loss / total
+
 
 def validate(model):
     model = model.to(device)
@@ -99,6 +115,63 @@ def average_state_dicts(dicts):
             avg_dict[key] += d[key]
         avg_dict[key] /= len(dicts)
     return avg_dict
+def average_weights(state_dict_list):
+
+    avg_state_dict = copy.deepcopy(state_dict_list[0])
+    for key in avg_state_dict.keys():
+        for i in range(1, len(state_dict_list)):
+            avg_state_dict[key] += state_dict_list[i][key]
+        avg_state_dict[key] = avg_state_dict[key] / len(state_dict_list)
+    return avg_state_dict
+
+# --- Main: WCM Federated Training Function ---
+def fed_WCM(global_model, client_loaders, num_clients_per_round=10, local_epochs=1, lr=0.05,
+            max_rounds=100, filename='./wcm_acc', sigma=0.1, S=5, device='cpu'):
+
+    round_acc = []
+    n_clients = len(client_loaders)
+
+    for t in range(max_rounds):
+        print(f"\n--- Round {t} ---")
+        selected_clients = np.random.choice(np.arange(n_clients), num_clients_per_round, replace=False)
+        client_updates = []
+
+        for cid in selected_clients:
+            noisy_models = []
+            noisy_losses = []
+
+            for s in range(S):
+                # Noise injected global model
+                noisy_global = add_gaussian_noise(global_model, sigma)
+                # Train on this noisy global
+                local_update = train_client(client_loaders[cid], noisy_global, local_epochs, lr)
+                # Wrap state_dict into a model to evaluate loss
+                local_model = type(global_model)().to(device)
+                local_model.load_state_dict(local_update)
+                loss = evaluate_loss(local_model, client_loaders[cid], criterion)
+                noisy_models.append(local_update)
+                noisy_losses.append(loss)
+
+            # Select worst-case update (highest loss)
+            worst_idx = np.argmax(noisy_losses)
+            client_updates.append(noisy_models[worst_idx])
+
+        # Aggregate updates (FedAvg style)
+        avg_update = average_weights(client_updates)
+        global_model.load_state_dict(avg_update)
+
+        # Validation accuracy
+        acc = validate(global_model)
+        print(f"Round {t}, Validation Accuracy: {acc:.4f}")
+        round_acc.append(acc)
+
+        if t % 10 == 0:
+            np.save(f"{filename}_{t}.npy", np.array(round_acc))
+
+    np.save(f"{filename}.npy", np.array(round_acc))
+    return np.array(round_acc)
+
+
 
 def fed_EBM(global_model, client_loaders, num_rounds, clients_per_round, local_epochs, lr, sigma, S, filename):
     acc_list = []
@@ -134,6 +207,21 @@ def fed_EBM(global_model, client_loaders, num_rounds, clients_per_round, local_e
             np.save(filename + f'_{t}.npy', np.array(acc_list))
     return np.array(acc_list)
 
+
+# Hyperparameters
+bsz = 10 # Batch size for local training
+SIGMA = 0.1     # Standard deviation for Gaussian noise
+S = 5           # Number of noise samples per client
+num_clients = 100 # Total number of clients
+num_rounds = 50 # Total number of communication rounds
+clients_per_round = 10 # Number of clients selected per round
+local_epochs = 1 # Number of local epochs per client
+lr = 0.05 # Learning rate for local training
+
+
+
+
+
 # ---- Run EBM Fed Learning ----
 mlp = MLP()
 print(mlp)
@@ -148,11 +236,51 @@ acc_mlp_ebm = fed_EBM(
     lr=lr,
     sigma=SIGMA,
     S=S,
-    filename='./acc_mlp_ebm'
+    filename='./acc_mlp_ebm_10'
 )
 
-np.save('./acc_mlp_ebm.npy', acc_mlp_ebm)
+np.save('./acc_mlp_ebm_10.npy', acc_mlp_ebm)
 print(acc_mlp_ebm)
+
+
+# # Example call after you define your loaders and global model
+# wcm_acc = fed_WCM(
+#     global_model=mlp,
+#     client_loaders=iid_client_train_loader,
+#     num_rounds=num_rounds,
+#     clients_per_round=clients_per_round,
+#     local_epochs=local_epochs,
+#     lr=lr,
+#     sigma=SIGMA,
+#     S=S,  # Number of noise samples per client per round
+#     criterion=criterion,
+#     filename='./acc_mlp_iid_wcm'
+# )
+# np.save('./acc_mlp_wcm_10.npy', wcm_acc)
+# print(wcm_acc)
+
+# # ---- Run EBM Fed Learning with m=50 ----
+# clients_per_round = 50
+# mlp = MLP()
+# print(mlp)
+# print("total params:", num_params(mlp))
+
+# acc_mlp_ebm_50 = fed_EBM(
+#     global_model=mlp,
+#     client_loaders=iid_client_train_loader,
+#     num_rounds=num_rounds,
+#     clients_per_round=clients_per_round,
+#     local_epochs=local_epochs,
+#     lr=lr,
+#     sigma=SIGMA,
+#     S=S,
+#     filename='./acc_mlp_ebm_50'
+# )
+
+# np.save('./acc_mlp_ebm_50.npy', acc_mlp_ebm_50)
+# print(acc_mlp_ebm)
+
+
 
 
 
