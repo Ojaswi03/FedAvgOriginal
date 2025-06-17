@@ -23,9 +23,9 @@ random.seed(0)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print("| using device:", device)
 
-# # Hyperparameters
+# Hyperparameters
 bsz = 10 # Batch size for local training
-SIGMA = 0.1     # Standard deviation for Gaussian noise 
+SIGMA = 0.1     # Standard deviation for Gaussian noise
 S = 5           # Number of noise samples per client
 num_clients = 100 # Total number of clients
 num_rounds = 100 # Total number of communication rounds
@@ -54,22 +54,6 @@ class MLP(nn.Module):
         return x
 
 criterion = nn.CrossEntropyLoss()
-
-# --- Helper: Evaluate average loss of model on loader ---
-def evaluate_loss(model, data_loader, criterion):
-    model.eval()
-    total_loss = 0
-    total = 0
-    with torch.no_grad():
-        for x, y in data_loader:
-            x = x.to(device)
-            y = y.to(device)
-            out = model(x)
-            loss = criterion(out, y)
-            total_loss += loss.item() * x.size(0)
-            total += x.size(0)
-    return total_loss / total
-
 
 def validate(model):
     model = model.to(device)
@@ -115,63 +99,60 @@ def average_state_dicts(dicts):
             avg_dict[key] += d[key]
         avg_dict[key] /= len(dicts)
     return avg_dict
-def average_weights(state_dict_list):
+def running_model_avg(current, next, scale):
+    if current == None:
+        current = next
+        for key in current:
+            current[key] = current[key] * scale
+    else:
+        for key in current:
+            current[key] = current[key] + (next[key] * scale)
+    return current
 
-    avg_state_dict = copy.deepcopy(state_dict_list[0])
-    for key in avg_state_dict.keys():
-        for i in range(1, len(state_dict_list)):
-            avg_state_dict[key] += state_dict_list[i][key]
-        avg_state_dict[key] = avg_state_dict[key] / len(state_dict_list)
-    return avg_state_dict
 
-# --- Main: WCM Federated Training Function ---
-def fed_WCM(global_model, client_loaders, num_clients_per_round=10, local_epochs=1, lr=0.05,
-            max_rounds=100, filename='./wcm_acc', sigma=0.1, S=5, device='cpu'):
+# I deal Federated Learning NO EBM
 
-    round_acc = []
-    n_clients = len(client_loaders)
+#     In the ideal setting of Federated Averaging (FedAvg), the central server aggregates the model updates from participating clients by calculating a weighted average of their model parameters. This weighted average forms the new global model, which is then sent back to the clients for the next round of training. 
+# The Mathematical Formula:
+# In the ideal setting, where all clients participate and data distribution is assumed to be Independent and Identically Distributed (IID) or relatively homogeneous, the aggregation formula is: 
+# Explanation of the Formula:
+# w^(t+1)_global: Represents the global model parameters for the next communication round (t+1).
+# k: Represents each participating client in the current round.
+# nk/n: This is the weight factor for each client's contribution.
+# nk: The number of data samples on client k.
+# n: The total number of data samples across all participating clients in the round.
+# w^(t+1)_k: Represents the updated model parameters of client k after local training. 
+# In essence, the formula implies: 
+# Each client (k) trains its local model based on the current global model received from the server, using its local dataset (nk).
+# The client sends its updated local model parameters (w^(t+1)_k) back to the server.
+# The server aggregates these updates by weighting each client's model parameters proportionally to the size of their local dataset (nk/n).
+# The aggregated global model (w^(t+1)_global) is then distributed back to the clients, and the process repeats. 
 
-    for t in range(max_rounds):
+def fed_avg(global_model, client_loaders, num_rounds, clients_per_round, local_epochs, lr, filename):
+    acc_list = []
+    client_ids = list(range(len(client_loaders)))
+
+    for t in range(num_rounds):
         print(f"\n--- Round {t} ---")
-        selected_clients = np.random.choice(np.arange(n_clients), num_clients_per_round, replace=False)
+        selected_clients = np.random.choice(client_ids, clients_per_round, replace=False)
         client_updates = []
 
         for cid in selected_clients:
-            noisy_models = []
-            noisy_losses = []
+            # Train locally on the selected client
+            local_update = train_client(client_loaders[cid], global_model, local_epochs, lr)
+            client_updates.append(local_update)
 
-            for s in range(S):
-                # Noise injected global model
-                noisy_global = add_gaussian_noise(global_model, sigma)
-                # Train on this noisy global
-                local_update = train_client(client_loaders[cid], noisy_global, local_epochs, lr)
-                # Wrap state_dict into a model to evaluate loss
-                local_model = type(global_model)().to(device)
-                local_model.load_state_dict(local_update)
-                loss = evaluate_loss(local_model, client_loaders[cid], criterion)
-                noisy_models.append(local_update)
-                noisy_losses.append(loss)
+        # Aggregate client updates
+        new_global_state = average_state_dicts(client_updates)
+        global_model.load_state_dict(new_global_state)
 
-            # Select worst-case update (highest loss)
-            worst_idx = np.argmax(noisy_losses)
-            client_updates.append(noisy_models[worst_idx])
-
-        # Aggregate updates (FedAvg style)
-        avg_update = average_weights(client_updates)
-        global_model.load_state_dict(avg_update)
-
-        # Validation accuracy
-        acc = validate(global_model)
-        print(f"Round {t}, Validation Accuracy: {acc:.4f}")
-        round_acc.append(acc)
-
+        val_acc = validate(global_model)
+        print(f"Round {t}, Validation Accuracy: {val_acc:.4f}")
+        acc_list.append(val_acc)
+        
         if t % 10 == 0:
-            np.save(f"{filename}_{t}.npy", np.array(round_acc))
-
-    np.save(f"{filename}.npy", np.array(round_acc))
-    return np.array(round_acc)
-
-
+            np.save(filename + f'_{t}.npy', np.array(acc_list))
+        return np.array(acc_list)
 
 def fed_EBM(global_model, client_loaders, num_rounds, clients_per_round, local_epochs, lr, sigma, S, filename):
     acc_list = []
@@ -208,15 +189,42 @@ def fed_EBM(global_model, client_loaders, num_rounds, clients_per_round, local_e
     return np.array(acc_list)
 
 
-# Hyperparameters
-bsz = 10 # Batch size for local training
-SIGMA = 0.1     # Standard deviation for Gaussian noise
-S = 5           # Number of noise samples per client
-num_clients = 100 # Total number of clients
-num_rounds = 50 # Total number of communication rounds
-clients_per_round = 10 # Number of clients selected per round
-local_epochs = 1 # Number of local epochs per client
-lr = 0.05 # Learning rate for local training
+
+def fed_avg_experiment(global_model, num_clients_per_round, num_local_epochs, lr, client_train_loader, max_rounds, filename):
+    round_accuracy = []
+    for t in range(max_rounds):
+        print("starting round {}".format(t))
+
+        # choose clients
+        clients = np.random.choice(np.arange(100), num_clients_per_round, replace = False)
+        print("clients: ", clients)
+
+        global_model.eval()
+        global_model = global_model.to(device)
+        running_avg = None
+
+        for i,c in enumerate(clients):
+            # train local client
+            print("round {}, starting client {}/{}, id: {}".format(t, i+1,num_clients_per_round, c))
+            local_model = train_client(c, client_train_loader[c], global_model, num_local_epochs, lr)
+
+            # add local model parameters to running average
+            running_avg = running_model_avg(running_avg, local_model.state_dict(), 1/num_clients_per_round)
+        
+        # set global model parameters for the next step
+        global_model.load_state_dict(running_avg)
+
+        # validate
+        val_acc = validate(global_model)
+        print("round {}, validation acc: {}".format(t, val_acc))
+        round_accuracy.append(val_acc)
+
+        if (t % 10 == 0):
+          np.save(filename+'_{}'.format(t)+'.npy', np.array(round_accuracy))
+
+    return np.array(round_accuracy)
+
+
 
 
 
@@ -236,50 +244,39 @@ acc_mlp_ebm = fed_EBM(
     lr=lr,
     sigma=SIGMA,
     S=S,
-    filename='./acc_mlp_ebm_10'
+    filename='./acc_mlp_ebm'
 )
-
-np.save('./acc_mlp_ebm_10.npy', acc_mlp_ebm)
+np.save('./acc_mlp_ebm.npy', acc_mlp_ebm)
 print(acc_mlp_ebm)
 
 
-# # Example call after you define your loaders and global model
-# wcm_acc = fed_WCM(
-#     global_model=mlp,
-#     client_loaders=iid_client_train_loader,
-#     num_rounds=num_rounds,
-#     clients_per_round=clients_per_round,
-#     local_epochs=local_epochs,
-#     lr=lr,
-#     sigma=SIGMA,
-#     S=S,  # Number of noise samples per client per round
-#     criterion=criterion,
-#     filename='./acc_mlp_iid_wcm'
-# )
-# np.save('./acc_mlp_wcm_10.npy', wcm_acc)
-# print(wcm_acc)
+acc_mlp_avg = fed_avg(
+    global_model=mlp,
+    client_loaders=iid_client_train_loader,
+    num_rounds=num_rounds,
+    clients_per_round=clients_per_round,
+    local_epochs=local_epochs,
+    lr=lr,
+    sigma=SIGMA,
+    S=S,
+    filename='./acc_mlp_avg'
+)
+np.save('./acc_mlp_avg.npy', acc_mlp_ebm)
+print(acc_mlp_avg)
 
-# # ---- Run EBM Fed Learning with m=50 ----
-# clients_per_round = 50
-# mlp = MLP()
-# print(mlp)
-# print("total params:", num_params(mlp))
-
-# acc_mlp_ebm_50 = fed_EBM(
-#     global_model=mlp,
-#     client_loaders=iid_client_train_loader,
-#     num_rounds=num_rounds,
-#     clients_per_round=clients_per_round,
-#     local_epochs=local_epochs,
-#     lr=lr,
-#     sigma=SIGMA,
-#     S=S,
-#     filename='./acc_mlp_ebm_50'
-# )
-
-# np.save('./acc_mlp_ebm_50.npy', acc_mlp_ebm_50)
-# print(acc_mlp_ebm)
-
+acc_mlp_centralized = fed_EBM(
+    global_model=mlp,
+    client_loaders=iid_client_train_loader,
+    num_rounds=num_rounds,
+    clients_per_round=clients_per_round,
+    local_epochs=local_epochs,
+    lr=lr,
+    sigma=SIGMA,
+    S=S,
+    filename='./acc_mlp_ebm'
+)
+np.save('./acc_mlp_ebm.npy', acc_mlp_ebm)
+print(acc_mlp_ebm)
 
 
 

@@ -3,7 +3,7 @@
 EBM Implementation
 
 """
-
+import os
 import random
 import copy
 import numpy as np
@@ -23,12 +23,12 @@ random.seed(0)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print("| using device:", device)
 
-# # Hyperparameters
+# Hyperparameters
 bsz = 10 # Batch size for local training
-SIGMA = 0.1     # Standard deviation for Gaussian noise 
+SIGMA = 1.0     # Standard deviation for Gaussian noise
 S = 5           # Number of noise samples per client
 num_clients = 100 # Total number of clients
-num_rounds = 100 # Total number of communication rounds
+num_rounds = 50 # Total number of communication rounds
 clients_per_round = 10 # Number of clients selected per round
 local_epochs = 1 # Number of local epochs per client
 lr = 0.05 # Learning rate for local training
@@ -55,22 +55,6 @@ class MLP(nn.Module):
 
 criterion = nn.CrossEntropyLoss()
 
-# --- Helper: Evaluate average loss of model on loader ---
-def evaluate_loss(model, data_loader, criterion):
-    model.eval()
-    total_loss = 0
-    total = 0
-    with torch.no_grad():
-        for x, y in data_loader:
-            x = x.to(device)
-            y = y.to(device)
-            out = model(x)
-            loss = criterion(out, y)
-            total_loss += loss.item() * x.size(0)
-            total += x.size(0)
-    return total_loss / total
-
-
 def validate(model):
     model = model.to(device)
     model.eval()
@@ -84,27 +68,75 @@ def validate(model):
             total += x.size(0)
     return correct / total
 
-def train_client(client_loader, global_model, num_local_epochs, lr):
-    # Returns a trained model (local update)
+# def train_client(client_loader, global_model, num_local_epochs, lr):
+#     # Returns a trained model (local update)
+#     local_model = copy.deepcopy(global_model)
+#     local_model.to(device)
+#     local_model.train()
+#     optimizer = torch.optim.SGD(local_model.parameters(), lr=lr)
+
+#     #  implement 2nd half of Eq13 
+#     # Gradient of loss function take the norm an dthe apply varience and add to loss funtion
+#     for _ in range(num_local_epochs):
+#         for x, y in client_loader:
+#             x, y = x.to(device), y.to(device)
+#             optimizer.zero_grad()
+#             out = local_model(x)
+#             loss = criterion(out, y)
+#             loss.backward()
+#             optimizer.step()
+#     return local_model.state_dict()
+
+
+def train_client(client_loader, global_model, num_local_epochs, lr, lambd=0.01):
     local_model = copy.deepcopy(global_model)
     local_model.to(device)
     local_model.train()
     optimizer = torch.optim.SGD(local_model.parameters(), lr=lr)
+
     for _ in range(num_local_epochs):
         for x, y in client_loader:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
-            out = local_model(x)
-            loss = criterion(out, y)
-            loss.backward()
+
+            # Forward pass
+            output = local_model(x)
+            loss = criterion(output, y)
+
+            # Backward to get gradients
+            grads = []
+            loss.backward(retain_graph=True)
+
+            for param in local_model.parameters():
+                if param.grad is not None:
+                    grads.append(param.grad.detach().clone().flatten())
+
+            flat_grads = torch.cat(grads)
+
+            # Now compute variance of the gradients
+            grad_variance = torch.var(flat_grads)
+            #Norm of loss from loss = criterion(output, y)
+            loss_norm = torch.norm(flat_grads)
+            #norm ** 2 Square
+            grad_norm_square = torch.norm(flat_grads) ** 2
+
+            # Total loss: empirical + lambda * variance
+            total_loss = loss + (grad_variance * grad_norm_square)
+
+            # Recompute to get gradients of the total loss
+            optimizer.zero_grad()
+            total_loss.backward()
             optimizer.step()
+
     return local_model.state_dict()
+
+
 
 def add_gaussian_noise(model, sigma):
     noisy_model = copy.deepcopy(model)
     for param in noisy_model.parameters():
         noise = torch.normal(0.0, sigma, size=param.data.size(), device=param.data.device)
-        # print(f"Adding noise with shape {noise.shape} and std {sigma} and noise = {noise}")
+        print(f"Noise mean: {noise.mean().item()} to parameter with shape {param.data.shape}")
         param.data += noise
     return noisy_model
 
@@ -116,72 +148,58 @@ def average_state_dicts(dicts):
             avg_dict[key] += d[key]
         avg_dict[key] /= len(dicts)
     return avg_dict
-def average_weights(state_dict_list):
 
-    avg_state_dict = copy.deepcopy(state_dict_list[0])
-    for key in avg_state_dict.keys():
-        for i in range(1, len(state_dict_list)):
-            avg_state_dict[key] += state_dict_list[i][key]
-        avg_state_dict[key] = avg_state_dict[key] / len(state_dict_list)
-    return avg_state_dict
+def running_model_avg(current, next, scale):
+    if current == None:
+        current = next
+        for key in current:
+            current[key] = current[key] * scale
+    else:
+        for key in current:
+            current[key] = current[key] + (next[key] * scale)
+    return current
 
-# def running_model_avg(current, next, scale):
-#     if current == None:
-#         current = next
-#         for key in current:
-#             current[key] = current[key] * scale
-#     else:
-#         for key in current:
-#             current[key] = current[key] + (next[key] * scale)
-#     return current
 
-# --- Main: WCM Federated Training Function ---
-def fed_WCM(global_model, client_loaders, max_rounds=100, num_clients_per_round=10, local_epochs=1, lr=0.05,
-            sigma=0.1, S= 5, filename='./wcm_acc', device='cpu'):
 
-    round_acc = []
-    n_clients = len(client_loaders)
+# centralized training
 
-    for t in range(max_rounds):
-        print(f"\n--- Round {t} ---")
-        selected_clients = np.random.choice(np.arange(n_clients), num_clients_per_round, replace=False)
-        client_updates = []
+def fed_Centralized(global_model, client_loaders, num_rounds,
+                    clients_per_round, local_epochs, lr,
+                    sigma, S, filename, verbose=True):
+    acc_list = []
 
-        for cid in selected_clients:
-            noisy_models = []
-            noisy_losses = []
+    # Merge all client data into one DataLoader
+    merged_dataset = torch.utils.data.ConcatDataset([loader.dataset for loader in client_loaders])
+    merged_loader = torch.utils.data.DataLoader(merged_dataset, batch_size=64, shuffle=True)
 
-            for s in range(S):
-                # Noise injected global model
-                noisy_global = add_gaussian_noise(global_model, sigma)
-                # Train on this noisy global
-                local_update = train_client(client_loaders[cid], noisy_global, local_epochs, lr)
-                # Wrap state_dict into a model to evaluate loss
-                local_model = type(global_model)().to(device)
-                local_model.load_state_dict(local_update)
-                loss = evaluate_loss(local_model, client_loaders[cid], criterion)
-                noisy_models.append(local_update)
-                noisy_losses.append(loss)
+    optimizer = torch.optim.SGD(global_model.parameters(), lr=lr)
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
 
-            # Select worst-case update (highest loss)
-            worst_idx = np.argmax(noisy_losses)
-            client_updates.append(noisy_models[worst_idx])
+    for t in range(num_rounds):
+        if verbose:
+            print(f"\n--- Centralized Round {t} ---")
+        global_model.train()
 
-        # Aggregate updates (FedAvg style)
-        avg_update = average_weights(client_updates)
-        global_model.load_state_dict(avg_update)
+        for epoch in range(local_epochs):
+            for x, y in merged_loader:
+                x = x.to(next(global_model.parameters()).device)
+                y = y.to(next(global_model.parameters()).device)
 
-        # Validation accuracy
-        acc = validate(global_model)
-        print(f"Round {t}, Validation Accuracy: {acc:.4f}")
-        round_acc.append(acc)
+                optimizer.zero_grad()
+                output = global_model(x)
+                loss = torch.nn.functional.cross_entropy(output, y)
+                loss.backward()
+                optimizer.step()
 
-        if t % 10 == 0:
-            np.save(f"{filename}_{t}.npy", np.array(round_acc))
+        val_acc = validate(global_model)  # Direct call
+        acc_list.append(val_acc)
+        if verbose:
+            print(f"Round {t}, Validation Accuracy: {val_acc:.4f}")
 
-    np.save(f"{filename}.npy", np.array(round_acc))
-    return np.array(round_acc)
+        if t % 10 == 0 or t == num_rounds - 1:
+            np.save(f"{filename}_{t}.npy", np.array(acc_list))
 
+    return np.array(acc_list), global_model
 
 
 def fed_EBM(global_model, client_loaders, num_rounds, clients_per_round, local_epochs, lr, sigma, S, filename):
@@ -218,49 +236,47 @@ def fed_EBM(global_model, client_loaders, num_rounds, clients_per_round, local_e
             np.save(filename + f'_{t}.npy', np.array(acc_list))
     return np.array(acc_list)
 
-# def fed_avg_experiment(global_model, num_clients_per_round, num_local_epochs, lr, client_train_loader, max_rounds, filename):
-#     round_accuracy = []
-#     for t in range(max_rounds):
-#         print("starting round {}".format(t))
 
-#         # choose clients
-#         clients = np.random.choice(np.arange(100), num_clients_per_round, replace = False)
-#         print("clients: ", clients)
+def fed_avg_experiment(global_model, num_clients_per_round, num_local_epochs, lr, client_train_loader, max_rounds, filename):
 
-#         global_model.eval()
-#         global_model = global_model.to(device)
-#         running_avg = None
+#def fed_avg_experiment(global_model, num_clients_per_round, num_local_epochs, lr, client_train_loader, max_rounds, filename):
+    round_accuracy = []
+    for t in range(max_rounds):
+        print("starting round {}".format(t))
 
-#         for i,c in enumerate(clients):
-#             # train local client
-#             print("round {}, starting client {}/{}, id: {}".format(t, i+1,num_clients_per_round, c))
-#             local_model = train_client(c, client_train_loader[c], global_model, num_local_epochs, lr)
+        # choose clients
+        clients = np.random.choice(np.arange(100), num_clients_per_round, replace = False)
+        print("clients: ", clients)
 
-#             # add local model parameters to running average
-#             running_avg = running_model_avg(running_avg, local_model.state_dict(), 1/num_clients_per_round)
+        global_model.eval()
+        global_model = global_model.to(device)
+        running_avg = None
+
+        for i,c in enumerate(clients):
+            # train local client
+            print("round {}, starting client {}/{}, id: {}".format(t, i+1,num_clients_per_round, c))
+            local_model = train_client(c, client_train_loader[c], global_model, num_local_epochs, lr)
+
+            # add local model parameters to running average
+            running_avg = running_model_avg(running_avg, local_model.state_dict(), 1/num_clients_per_round)
         
-#         # set global model parameters for the next step
-#         global_model.load_state_dict(running_avg)
+        # set global model parameters for the next step
+        global_model.load_state_dict(running_avg)
 
-#         # validate
-#         val_acc = validate(global_model)
-#         print("round {}, validation acc: {}".format(t, val_acc))
-#         round_accuracy.append(val_acc)
+        # validate
+        val_acc = validate(global_model)
+        print("round {}, validation acc: {}".format(t, val_acc))
+        round_accuracy.append(val_acc)
 
-#         if (t % 10 == 0):
-#           np.save(filename+'_{}'.format(t)+'.npy', np.array(round_accuracy))
+        if (t % 10 == 0):
+          np.save(filename+'_{}'.format(t)+'.npy', np.array(round_accuracy))
 
-#     return np.array(round_accuracy)
+    return np.array(round_accuracy)
 
-# Hyperparameters
-bsz = 10 # Batch size for local training
-SIGMA = 0.1  # 0.1   # Standard deviation for Gaussian noise
-S = 10   #5        # Number of noise samples per client
-num_clients = 100 # Total number of clients
-num_rounds = 50 # Total number of communication rounds
-clients_per_round = 10 # Number of clients selected per round
-local_epochs = 1 # Number of local epochs per client
-lr = 0.05 # Learning rate for local training
+
+
+
+
 
 
 # ---- Run EBM Fed Learning ----
@@ -277,154 +293,35 @@ acc_mlp_ebm = fed_EBM(
     lr=lr,
     sigma=SIGMA,
     S=S,
-    filename='./acc_mlp_ebm_10_sigma01'
+    filename='./acc_mlp_ebm'
 )
-
-np.save('./acc_mlp_ebm_10_sigma01.npy', acc_mlp_ebm)
+np.save('./acc_mlp_ebm.npy', acc_mlp_ebm)
 print(acc_mlp_ebm)
 
 
-# mlp_iid_m10 = copy.deepcopy(mlp)
-# acc_mlp_iid_m10 = fed_avg_experiment(mlp_iid_m10, num_clients_per_round=10, 
-#                                  num_local_epochs=1,
-#                                  lr=0.05,
-#                                  client_train_loader = iid_client_train_loader,
-#                                  max_rounds=50,
-#                                  filename='./acc_mlp_iid_m10')
-# print(acc_mlp_iid_m10)
-# np.save('./acc_mlp_iid_m10.npy', acc_mlp_iid_m10)
-
-
-
-
-# # Example call after you define your loaders and global model
-# wcm_acc = fed_WCM(
+# acc_mlp_avg = fed_avg_experiment(
 #     global_model=mlp,
-#     client_loaders=iid_client_train_loader,
-#     max_rounds=num_rounds,
-#     clients_per_round=clients_per_round,
-#     local_epochs=local_epochs,
+#     num_clients_per_round=clients_per_round,
+#     num_local_epochs=local_epochs,
 #     lr=lr,
-#     sigma=SIGMA,
-#     S=S,  # Number of noise samples per client per round
-#     filename='./acc_mlp_wcm_10',
-#     device=device  # Uncomment if you want to specify the device
+#     client_train_loader=iid_client_train_loader,
+#     max_rounds=num_rounds,
+#     filename='./acc_mlp_avg'
 # )
-# np.save('./acc_mlp_wcm_10.npy', wcm_acc)
-# print(wcm_acc)
+# np.save('./acc_mlp_avg.npy', acc_mlp_avg)
+# print(acc_mlp_avg)
 
-# # ---- Run EBM Fed Learning with m=50 ----
-# clients_per_round = 50
-# mlp = MLP()
-# print(mlp)
-# print("total params:", num_params(mlp))
-
-# acc_mlp_ebm_50 = fed_EBM(
+# acc_mlp_centralized, _ = fed_Centralized(
 #     global_model=mlp,
 #     client_loaders=iid_client_train_loader,
 #     num_rounds=num_rounds,
 #     clients_per_round=clients_per_round,
 #     local_epochs=local_epochs,
 #     lr=lr,
-#     sigma=SIGMA,
+#     sigma=0,
 #     S=S,
-#     filename='./acc_mlp_ebm_50'
+#     filename='./acc_mlp_centralized'
 # )
+# np.save('./acc_mlp_centralized.npy', acc_mlp_centralized)
 
-# np.save('./acc_mlp_ebm_50.npy', acc_mlp_ebm_50)
-# print(acc_mlp_ebm)
-
-
-
-
-
-# MLP - iid - m=50 experiment
-# mlp_iid_m50 = copy.deepcopy(mlp)
-# acc_mlp_iid_m50 = fed_avg_experiment(mlp_iid_m50, num_clients_per_round=50, 
-#                                  num_local_epochs=1,
-#                                  lr=0.05,
-#                                  client_train_loader = iid_client_train_loader,
-#                                  max_rounds=100,# 100
-#                                  filename='./acc_mlp_iid_m50',
-#                                  sigma_e=0.1)
-# print(acc_mlp_iid_m50)
-# np.save('./acc_mlp_iid_m50.npy', acc_mlp_iid_m50)
-
-
-# # MLP - non-iid - m=10 experiment
-# mlp_noniid_m10 = copy.deepcopy(mlp)
-# acc_mlp_noniid_m10 = fed_avg_experiment(mlp_noniid_m10, num_clients_per_round=10, 
-#                                  num_local_epochs=1,
-#                                  lr=0.05,
-#                                  client_train_loader = noniid_client_train_loader,
-#                                  max_rounds=300,
-#                                  filename = './acc_mlp_noniid_m10')
-# print(acc_mlp_noniid_m10)
-# np.save('./acc_mlp_noniid_m10.npy', acc_mlp_noniid_m10)
-
-
-
-# # MLP - noniid - m=50 experiment
-# mlp_noniid_m50 = copy.deepcopy(mlp)
-# acc_mlp_noniid_m50 = fed_avg_experiment(mlp_noniid_m50, num_clients_per_round=50, 
-#                                  num_local_epochs=1,
-#                                  lr=0.05,
-#                                  client_train_loader = noniid_client_train_loader,
-#                                  max_rounds=300,
-#                                  filename='./acc_mlp_noniid_m50')
-# print(acc_mlp_noniid_m50)
-# np.save('./acc_mlp_noniid_m50.npy', acc_mlp_noniid_m50)
-
-
-# cnn = CNN()
-# print(cnn)
-# print("total params: ", num_params(cnn))
-
-
-# # CNN - iid - m=10 experiment
-# cnn_iid_m10 = copy.deepcopy(cnn)
-# acc_cnn_iid_m10 = fed_avg_experiment(cnn_iid_m10, num_clients_per_round=10, 
-#                                  num_local_epochs=5,
-#                                  lr=0.01,
-#                                  client_train_loader = iid_client_train_loader,
-#                                  max_rounds=100,  # 100
-#                                  filename='./acc_cnn_iid_m10')
-# print(acc_cnn_iid_m10)
-# np.save('./acc_cnn_iid_m10.npy', acc_cnn_iid_m10)
-
-
-# # CNN - iid - m=50 experiment
-# cnn_iid_m50 = copy.deepcopy(cnn)
-# acc_cnn_iid_m50 = fed_avg_experiment(cnn_iid_m50, num_clients_per_round=50, 
-#                                  num_local_epochs=5,
-#                                  lr=0.01,
-#                                  client_train_loader = iid_client_train_loader,
-#                                  max_rounds=100,  # 100
-#                                  filename='./acc_cnn_iid_m50')
-# print(acc_cnn_iid_m50)
-# np.save('./acc_cnn_iid_m50.npy', acc_cnn_iid_m50)
-
-
-# # CNN - non-iid - m=10 experiment
-# cnn_noniid_m10 = copy.deepcopy(cnn)
-# acc_cnn_noniid_m10 = fed_avg_experiment(cnn_noniid_m10, num_clients_per_round=10, 
-#                                  num_local_epochs=5,
-#                                  lr=0.01,
-#                                  client_train_loader = noniid_client_train_loader,
-#                                  max_rounds=200,
-#                                  filename='./acc_cnn_noniid_m10')
-# print(acc_cnn_noniid_m10)
-# np.save('./acc_cnn_noniid_m10.npy', acc_cnn_noniid_m10)
-
-
-
-# # CNN - non-iid - m=50 experiment
-# cnn_noniid_m50 = copy.deepcopy(cnn)
-# acc_cnn_noniid_m50 = fed_avg_experiment(cnn_noniid_m50, num_clients_per_round=50, 
-#                                  num_local_epochs=5,
-#                                  lr=0.01,
-#                                  client_train_loader = noniid_client_train_loader,
-#                                  max_rounds=100,
-#                                  filename='./acc_cnn_noniid_m50')
-# print(acc_cnn_noniid_m50)
-# np.save('./acc_cnn_noniid_m50.npy', acc_cnn_noniid_m50)
+# print(acc_mlp_centralized)
