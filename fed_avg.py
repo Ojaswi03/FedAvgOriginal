@@ -119,23 +119,7 @@ def running_model_avg(current, next, scale):
     return current
 
 
-# I deal Federated Learning NO EBM
 
-#     In the ideal setting of Federated Averaging (FedAvg), the central server aggregates the model updates from participating clients by calculating a weighted average of their model parameters. This weighted average forms the new global model, which is then sent back to the clients for the next round of training. 
-# The Mathematical Formula:
-# In the ideal setting, where all clients participate and data distribution is assumed to be Independent and Identically Distributed (IID) or relatively homogeneous, the aggregation formula is: 
-# Explanation of the Formula:
-# w^(t+1)_global: Represents the global model parameters for the next communication round (t+1).
-# k: Represents each participating client in the current round.
-# nk/n: This is the weight factor for each client's contribution.
-# nk: The number of data samples on client k.
-# n: The total number of data samples across all participating clients in the round.
-# w^(t+1)_k: Represents the updated model parameters of client k after local training. 
-# In essence, the formula implies: 
-# Each client (k) trains its local model based on the current global model received from the server, using its local dataset (nk).
-# The client sends its updated local model parameters (w^(t+1)_k) back to the server.
-# The server aggregates these updates by weighting each client's model parameters proportionally to the size of their local dataset (nk/n).
-# The aggregated global model (w^(t+1)_global) is then distributed back to the clients, and the process repeats. 
 
 def fed_avg(global_model, client_loaders, num_rounds, clients_per_round, local_epochs, lr, filename):
     acc_list = []
@@ -161,7 +145,8 @@ def fed_avg(global_model, client_loaders, num_rounds, clients_per_round, local_e
         
         if t % 10 == 0:
             np.save(filename + f'_{t}.npy', np.array(acc_list))
-        return np.array(acc_list)
+        # return np.array(acc_list)
+    return np.array(acc_list)
 
 
 def fed_avg_experiment(global_model, num_clients_per_round, num_local_epochs, lr, client_train_loader, max_rounds, sigma, filename):
