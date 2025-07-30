@@ -68,11 +68,12 @@ def validate(model):
             total += x.size(0)
     return correct / total
 
-def train_client(client_loader, global_model, num_local_epochs, lr):
+def train_client(client_loader, global_model, num_local_epochs, lr, sigma=0.0):
     # Returns a trained model (local update)
     local_model = copy.deepcopy(global_model)
     local_model.to(device)
     local_model.train()
+    sigma_squared = sigma ** 2
     optimizer = torch.optim.SGD(local_model.parameters(), lr=lr)
     for _ in range(num_local_epochs):
         for x, y in client_loader:
@@ -80,6 +81,14 @@ def train_client(client_loader, global_model, num_local_epochs, lr):
             optimizer.zero_grad()
             out = local_model(x)
             loss = criterion(out, y)
+            if sigma_squared > 0.00:
+                # grad of loss function
+                grad = torch.autograd.grad(loss, local_model.parameters(), create_graph=True)
+                #gradiant norm squared
+                grad_norm_squared = sum((g ** 2).sum() for g in grad)
+                # add noise to the loss
+                loss += sigma_squared * grad_norm_squared
+                
             loss.backward()
             optimizer.step()
     return local_model.state_dict()
@@ -139,7 +148,7 @@ def fed_avg(global_model, client_loaders, num_rounds, clients_per_round, local_e
 
         for cid in selected_clients:
             # Train locally on the selected client
-            local_update = train_client(client_loaders[cid], global_model, local_epochs, lr)
+            local_update = train_client(client_loaders[cid], global_model, local_epochs, lr, sigma=0.0)
             client_updates.append(local_update)
 
         # Aggregate client updates
@@ -154,43 +163,8 @@ def fed_avg(global_model, client_loaders, num_rounds, clients_per_round, local_e
             np.save(filename + f'_{t}.npy', np.array(acc_list))
         return np.array(acc_list)
 
-def fed_EBM(global_model, client_loaders, num_rounds, clients_per_round, local_epochs, lr, sigma, S, filename):
-    acc_list = []
-    client_ids = list(range(len(client_loaders)))
 
-    for t in range(num_rounds):
-        print(f"\n--- Round {t} ---")
-        selected_clients = np.random.choice(client_ids, clients_per_round, replace=False)
-        client_updates = []
-
-        for cid in selected_clients:
-            # For each client, take S expectation samples
-            noise_updates = []
-            for s in range(S):
-                # 1. Add noise to global model
-                noisy_global = add_gaussian_noise(global_model, sigma)
-                # 2. Train locally
-                local_update = train_client(client_loaders[cid], noisy_global, local_epochs, lr)
-                noise_updates.append(local_update)
-            # 3. Average the S updates for this client
-            expected_update = average_state_dicts(noise_updates)
-            client_updates.append(expected_update)
-
-        # Aggregate client updates
-        new_global_state = average_state_dicts(client_updates)
-        global_model.load_state_dict(new_global_state)
-
-        val_acc = validate(global_model)
-        print(f"Round {t}, Validation Accuracy: {val_acc:.4f}")
-        acc_list.append(val_acc)
-
-        if t % 10 == 0:
-            np.save(filename + f'_{t}.npy', np.array(acc_list))
-    return np.array(acc_list)
-
-
-
-def fed_avg_experiment(global_model, num_clients_per_round, num_local_epochs, lr, client_train_loader, max_rounds, filename):
+def fed_avg_experiment(global_model, num_clients_per_round, num_local_epochs, lr, client_train_loader, max_rounds, sigma, filename):
     round_accuracy = []
     for t in range(max_rounds):
         print("starting round {}".format(t))
@@ -206,7 +180,7 @@ def fed_avg_experiment(global_model, num_clients_per_round, num_local_epochs, lr
         for i,c in enumerate(clients):
             # train local client
             print("round {}, starting client {}/{}, id: {}".format(t, i+1,num_clients_per_round, c))
-            local_model = train_client(c, client_train_loader[c], global_model, num_local_epochs, lr)
+            local_model = train_client(c, client_train_loader[c], global_model, num_local_epochs, lr, sigma)
 
             # add local model parameters to running average
             running_avg = running_model_avg(running_avg, local_model.state_dict(), 1/num_clients_per_round)
@@ -225,9 +199,40 @@ def fed_avg_experiment(global_model, num_clients_per_round, num_local_epochs, lr
     return np.array(round_accuracy)
 
 
+#EBM
+def fed_EBM(global_model, client_loaders, num_rounds, clients_per_round, local_epochs, lr, sigma, S, filename):
+    acc_list = []
+    client_ids = list(range(len(client_loaders)))
 
+    for t in range(num_rounds):
+        print(f"\n--- Round {t} ---")
+        selected_clients = np.random.choice(client_ids, clients_per_round, replace=False)
+        client_updates = []
 
+        for cid in selected_clients:
+            # For each client, take S expectation samples
+            noise_updates = []
+            for s in range(S):
+                # 1. Add noise to global model
+                noisy_global = add_gaussian_noise(global_model, sigma)
+                # 2. Train locally
+                local_update = train_client(client_loaders[cid], noisy_global, local_epochs, lr, sigma)
+                noise_updates.append(local_update)
+            # 3. Average the S updates for this client
+            expected_update = average_state_dicts(noise_updates)
+            client_updates.append(expected_update)
 
+        # Aggregate client updates
+        new_global_state = average_state_dicts(client_updates)
+        global_model.load_state_dict(new_global_state)
+
+        val_acc = validate(global_model)
+        print(f"Round {t}, Validation Accuracy: {val_acc:.4f}")
+        acc_list.append(val_acc)
+
+        if t % 10 == 0:
+            np.save(filename + f'_{t}.npy', np.array(acc_list))
+    return np.array(acc_list)
 
 
 # ---- Run EBM Fed Learning ----

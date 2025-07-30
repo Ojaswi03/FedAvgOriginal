@@ -1,6 +1,0 @@
-Traceback (most recent call last):
-  File "/home/oj/FedAvgOriginal/fed_avg.py", line 14, in <module>
-    from util import view_10, num_params
-  File "/home/oj/FedAvgOriginal/util.py", line 2, in <module>
-    import IPython
-ModuleNotFoundError: No module named 'IPython'
