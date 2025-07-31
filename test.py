@@ -315,57 +315,57 @@ conventionalFedAvg_noisy = MLP()
 conventionalFedAvg_clean = MLP()
 ebmFedAvg = MLP()
 
-# # --- Centralized Model ---
-# print("Centralized model:")
-# print(central)
-# print("total params:", num_params(central))
-# central_train_loader = torch.utils.data.DataLoader(train_data, batch_size=32, shuffle=True)
+# --- Centralized Model ---
+print("Centralized model:")
+print(central)
+print("total params:", num_params(central))
+central_train_loader = torch.utils.data.DataLoader(train_data, batch_size=32, shuffle=True)
 
-# acc_mlp_centralized, loss_mlp_centralized = train_centralized(
-#     model=central,
-#     train_loader=central_train_loader,
-#     test_loader=test_loader,
-#     num_epochs=num_rounds,
-#     lr=lr
-# )
-# np.save('./acc_mlp_centralized.npy', acc_mlp_centralized)
-# np.save('./loss_mlp_centralized.npy', loss_mlp_centralized)
-# print("Centralized model accuracy:", acc_mlp_centralized)
+acc_mlp_centralized, loss_mlp_centralized = train_centralized(
+    model=central,
+    train_loader=central_train_loader,
+    test_loader=test_loader,
+    num_epochs=num_rounds,
+    lr=lr
+)
+np.save('./acc_mlp_centralized.npy', acc_mlp_centralized)
+np.save('./loss_mlp_centralized.npy', loss_mlp_centralized)
+print("Centralized model accuracy:", acc_mlp_centralized)
 
-# # --- FedAvg Noisy ---
-# print("Conventional FedAvg Noisy model:")
-# print(conventionalFedAvg_noisy)
-# print("total params:", num_params(conventionalFedAvg_noisy))
-# acc_mlp_avg, loss_mlp_avg = fed_avg(
-#     global_model=conventionalFedAvg_noisy,
-#     client_loaders=iid_client_train_loader,
-#     num_rounds=num_rounds,
-#     clients_per_round=clients_per_round,
-#     local_epochs=local_epochs,
-#     lr=lr,
-#     sigma=SIGMA,
-#     filename='./acc_mlp_avg'
-# )
-# np.save('./acc_mlp_avg.npy', acc_mlp_avg)
-# np.save('./loss_mlp_avg.npy', loss_mlp_avg)
-# print("FedAvg accuracy:", acc_mlp_avg)
+# --- FedAvg Noisy ---
+print("Conventional FedAvg Noisy model:")
+print(conventionalFedAvg_noisy)
+print("total params:", num_params(conventionalFedAvg_noisy))
+acc_mlp_avg, loss_mlp_avg = fed_avg(
+    global_model=conventionalFedAvg_noisy,
+    client_loaders=iid_client_train_loader,
+    num_rounds=num_rounds,
+    clients_per_round=clients_per_round,
+    local_epochs=local_epochs,
+    lr=lr,
+    sigma=SIGMA,
+    filename='./acc_mlp_avg'
+)
+np.save('./acc_mlp_avg.npy', acc_mlp_avg)
+np.save('./loss_mlp_avg.npy', loss_mlp_avg)
+print("FedAvg accuracy:", acc_mlp_avg)
 
-# # --- FedAvg Clean ---
-# print("Conventional FedAvg Clean model:")
-# print(conventionalFedAvg_clean)
-# print("total params:", num_params(conventionalFedAvg_clean))
-# acc_mlp_avg_clean, loss_mlp_avg_clean = fed_avg_clean(
-#     global_model=conventionalFedAvg_clean,
-#     client_loaders=iid_client_train_loader,
-#     num_rounds=num_rounds,
-#     clients_per_round=clients_per_round,
-#     local_epochs=local_epochs,
-#     lr=lr,
-#     filename='./acc_mlp_avg_clean'
-# )
-# np.save('./acc_mlp_avg_clean.npy', acc_mlp_avg_clean)
-# np.save('./loss_mlp_avg_clean.npy', loss_mlp_avg_clean)
-# print("FedAvg Clean accuracy:", acc_mlp_avg_clean)
+# --- FedAvg Clean ---
+print("Conventional FedAvg Clean model:")
+print(conventionalFedAvg_clean)
+print("total params:", num_params(conventionalFedAvg_clean))
+acc_mlp_avg_clean, loss_mlp_avg_clean = fed_avg_clean(
+    global_model=conventionalFedAvg_clean,
+    client_loaders=iid_client_train_loader,
+    num_rounds=num_rounds,
+    clients_per_round=clients_per_round,
+    local_epochs=local_epochs,
+    lr=lr,
+    filename='./acc_mlp_avg_clean'
+)
+np.save('./acc_mlp_avg_clean.npy', acc_mlp_avg_clean)
+np.save('./loss_mlp_avg_clean.npy', loss_mlp_avg_clean)
+print("FedAvg Clean accuracy:", acc_mlp_avg_clean)
 
 # --- Expectation-Based FedAvg (EBM) ---
 print("Expectation-based FedAvg (EBM) model:")
