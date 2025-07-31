@@ -45,5 +45,5 @@ plt.grid(True, linestyle=':')
 plt.legend()
 
 plt.tight_layout()
-plt.savefig('Images/fed_avg_vs_ebm_accuracy_loss1.png', dpi=300)
+plt.savefig('Images/fed_avg_vs_ebm_accuracy_loss2.png', dpi=300)
 plt.show()

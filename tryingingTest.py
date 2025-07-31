@@ -173,6 +173,8 @@ def fed_avg(global_model, client_loaders, num_rounds, clients_per_round, local_e
     loss_list = []
 
     for rnd in range(num_rounds):
+        
+        # Sample clients by index from list
         sampled_indices = random.sample(range(len(client_loaders)), clients_per_round)
         weights_list = []
         round_loss = 0.0
@@ -180,19 +182,21 @@ def fed_avg(global_model, client_loaders, num_rounds, clients_per_round, local_e
 
         for idx in sampled_indices:
             client_loader = client_loaders[idx]
+            # Add Gaussian noise to global weights
             noisy_model = copy.deepcopy(global_model)
             for name, param in noisy_model.named_parameters():
                 noise = torch.normal(0, sigma, size=param.shape).to(device)
                 param.data += noise
-
+            #Train locally using standard SGD
             updated_weights, local_loss_list = train_client(client_loader, noisy_model, local_epochs, lr, sigma)
             weights_list.append(updated_weights)
             round_loss += sum(local_loss_list)
             round_count += len(local_loss_list)
-
+        # Aggregate
         global_dict = average_state_dicts(weights_list)
         global_model.load_state_dict(global_dict)
 
+        # Validate and Evaluate
         acc = validate(global_model)
         avg_round_loss = round_loss / round_count if round_count > 0 else 0.0
         acc_list.append(acc)
@@ -226,15 +230,18 @@ def fed_avg_clean(global_model, client_loaders, num_rounds, clients_per_round, l
 
         for idx in sampled_indices:
             client_loader = client_loaders[idx]
+            # Clone global model (no noise this time)
             local_model = copy.deepcopy(global_model)
+            # Local training
             updated_weights, local_loss_list = train_client(client_loader, local_model, local_epochs, lr)
             weights_list.append(updated_weights)
             round_loss += sum(local_loss_list)
             round_count += len(local_loss_list)
-
+        # Aggregate
         global_dict = average_state_dicts(weights_list)
         global_model.load_state_dict(global_dict)
-
+        
+        # Validate and Evaluate
         acc = validate(global_model)
         avg_round_loss = round_loss / round_count if round_count > 0 else 0.0
         acc_list.append(acc)
@@ -266,19 +273,22 @@ def fed_EBM(global_model, client_loaders, num_rounds, clients_per_round, local_e
         round_count = 0
 
         for cid in selected_clients:
+            # For each client, take S expectation samples
             noise_updates = []
             all_losses = []
             for s in range(S):
+                # 1. Add noise to global model
                 noisy_global = add_gaussian_noise(global_model, sigma)
+                # 2. Train locally
                 local_update, local_loss_list = train_client(client_loaders[cid], noisy_global, local_epochs, lr, sigma)
                 noise_updates.append(local_update)
                 all_losses.extend(local_loss_list)
-
+            # 3. Average the S updates for this client
             expected_update = average_state_dicts(noise_updates)
             client_updates.append(expected_update)
             round_loss += sum(all_losses)
             round_count += len(all_losses)
-
+        # Aggregate client updates
         new_global_state = average_state_dicts(client_updates)
         global_model.load_state_dict(new_global_state)
 
