@@ -22,15 +22,16 @@ random.seed(0)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print("| using device:", device)
 
-# Hyperparameters
-bsz = 10                # Batch size for local training
-SIGMA = 0.1             # Standard deviation for Gaussian noise
-S = 5                   # Number of noise samples per client
-num_clients = 100       # Total number of clients
-num_rounds = 100        # Total number of communication rounds
-clients_per_round = 10  # Number of clients selected per round
-local_epochs = 1        # Number of local epochs per client
-lr = 0.05               # Learning rate for local training
+                # Hyperparameters
+bsz = 10                        # Batch size for local training
+SIGMA = 0.1                     # Standard deviation for Gaussian noise
+S = 5                           # Number of noise samples per client
+num_clients = 100               # Total number of clients
+num_rounds = 100                # Total number of communication rounds
+clients_per_round = 10          # Number of clients selected per round
+local_epochs = 1                # Number of local epochs per client
+lr = 0.05                       # Learning rate for local training
+use_regularizer = True          # Whether to use the regularizer in local training
 
 # Load Data
 train_data, test_data = fetch_dataset()
@@ -38,7 +39,10 @@ test_loader = torch.utils.data.DataLoader(test_data, batch_size=1000, shuffle=Fa
 iid_client_train_loader = iid_partition_loader(train_data, bsz=bsz)
 # set up noniid_client_train_loader when needed.
 
-# Models
+#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                # Models
+#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 class MLP(nn.Module):
     def __init__(self):
         super(MLP, self).__init__()
@@ -67,7 +71,7 @@ def validate(model):
             total += x.size(0)
     return correct / total
 
-def train_client(client_loader, global_model, num_local_epochs, lr, sigma=0.0):
+def train_client(client_loader, global_model, num_local_epochs, lr, sigma=0.0, regularizer=True):
     # Returns a trained model (local update) and a list of loss values per epoch
     local_model = copy.deepcopy(global_model)
     local_model.to(device)
@@ -84,7 +88,7 @@ def train_client(client_loader, global_model, num_local_epochs, lr, sigma=0.0):
             optimizer.zero_grad()
             out = local_model(x)
             loss = criterion(out, y)
-            if sigma_squared > 1e-6:  # Add noise only if sigma is significant
+            if sigma_squared > 1e-6 and regularizer:  # Add noise only if sigma is significant
                 grad = torch.autograd.grad(loss, local_model.parameters(), create_graph=True)
                 grad_norm_squared = sum((g ** 2).sum() for g in grad)
                 loss += sigma_squared * grad_norm_squared
@@ -188,7 +192,7 @@ def fed_avg(global_model, client_loaders, num_rounds, clients_per_round, local_e
                 noise = torch.normal(0, sigma, size=param.shape).to(device)
                 param.data += noise
             #Train locally using standard SGD
-            updated_weights, local_loss_list = train_client(client_loader, noisy_model, local_epochs, lr, sigma)
+            updated_weights, local_loss_list = train_client(client_loader, noisy_model, local_epochs, lr, sigma, regularizer=False)
             weights_list.append(updated_weights)
             round_loss += sum(local_loss_list)
             round_count += len(local_loss_list)
@@ -233,7 +237,7 @@ def fed_avg_clean(global_model, client_loaders, num_rounds, clients_per_round, l
             # Clone global model (no noise this time)
             local_model = copy.deepcopy(global_model)
             # Local training
-            updated_weights, local_loss_list = train_client(client_loader, local_model, local_epochs, lr)
+            updated_weights, local_loss_list = train_client(client_loader, local_model, local_epochs, lr, regularizer=False)
             weights_list.append(updated_weights)
             round_loss += sum(local_loss_list)
             round_count += len(local_loss_list)
@@ -280,7 +284,7 @@ def fed_EBM(global_model, client_loaders, num_rounds, clients_per_round, local_e
                 # 1. Add noise to global model
                 noisy_global = add_gaussian_noise(global_model, sigma)
                 # 2. Train locally
-                local_update, local_loss_list = train_client(client_loaders[cid], noisy_global, local_epochs, lr, sigma)
+                local_update, local_loss_list = train_client(client_loaders[cid], noisy_global, local_epochs, lr, sigma, regularizer=use_regularizer)
                 noise_updates.append(local_update)
                 all_losses.extend(local_loss_list)
             # 3. Average the S updates for this client
@@ -314,6 +318,29 @@ central = MLP()
 conventionalFedAvg_noisy = MLP()
 conventionalFedAvg_clean = MLP()
 ebmFedAvg = MLP()
+
+
+
+
+# --- Expectation-Based FedAvg (EBM) ---
+print("Expectation-based FedAvg (EBM) model:")
+print(ebmFedAvg)
+print("total params:", num_params(ebmFedAvg))
+acc_mlp_ebm, loss_mlp_ebm = fed_EBM(
+    global_model=ebmFedAvg,
+    client_loaders=iid_client_train_loader,
+    num_rounds=num_rounds,
+    clients_per_round=clients_per_round,
+    local_epochs=local_epochs,
+    lr=lr,
+    sigma=SIGMA,
+    S=S,
+    filename='./acc_mlp_ebm'
+)
+np.save('./acc_mlp_ebm.npy', acc_mlp_ebm)
+np.save('./loss_mlp_ebm.npy', loss_mlp_ebm)
+print("EBM FedAvg accuracy:", acc_mlp_ebm)
+
 
 # --- Centralized Model ---
 print("Centralized model:")
@@ -367,21 +394,3 @@ np.save('./acc_mlp_avg_clean.npy', acc_mlp_avg_clean)
 np.save('./loss_mlp_avg_clean.npy', loss_mlp_avg_clean)
 print("FedAvg Clean accuracy:", acc_mlp_avg_clean)
 
-# --- Expectation-Based FedAvg (EBM) ---
-print("Expectation-based FedAvg (EBM) model:")
-print(ebmFedAvg)
-print("total params:", num_params(ebmFedAvg))
-acc_mlp_ebm, loss_mlp_ebm = fed_EBM(
-    global_model=ebmFedAvg,
-    client_loaders=iid_client_train_loader,
-    num_rounds=num_rounds,
-    clients_per_round=clients_per_round,
-    local_epochs=local_epochs,
-    lr=lr,
-    sigma=SIGMA,
-    S=S,
-    filename='./acc_mlp_ebm'
-)
-np.save('./acc_mlp_ebm.npy', acc_mlp_ebm)
-np.save('./loss_mlp_ebm.npy', loss_mlp_ebm)
-print("EBM FedAvg accuracy:", acc_mlp_ebm)
